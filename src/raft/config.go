@@ -8,19 +8,23 @@ package raft
 // test with the original before submitting.
 //
 
-import "6.824/labgob"
-import "6.824/labrpc"
-import "bytes"
-import "log"
-import "sync"
-import "testing"
-import "runtime"
-import "math/rand"
-import crand "crypto/rand"
-import "math/big"
-import "encoding/base64"
-import "time"
-import "fmt"
+import (
+	"bytes"
+	"log"
+	"math/rand"
+	"runtime"
+	"sync"
+	"testing"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+
+	crand "crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"math/big"
+	"time"
+)
 
 func randstring(n int) string {
 	b := make([]byte, 2*n)
@@ -397,6 +401,8 @@ func (cfg *config) checkOneLeader() int {
 			return leaders[lastTermWithLeader][0]
 		}
 	}
+	DPrintf("expected one leader, got none")
+	DPrintf("Fail")
 	cfg.t.Fatalf("expected one leader, got none")
 	return -1
 }
@@ -410,6 +416,8 @@ func (cfg *config) checkTerms() int {
 			if term == -1 {
 				term = xterm
 			} else if term != xterm {
+				DPrintf("servers disagree on term")
+				DPrintf("Fail")
 				cfg.t.Fatalf("servers disagree on term")
 			}
 		}
@@ -423,6 +431,8 @@ func (cfg *config) checkNoLeader() {
 		if cfg.connected[i] {
 			_, is_leader := cfg.rafts[i].GetState()
 			if is_leader {
+				DPrintf("expected no leader, but %v claims to be leader", i)
+				DPrintf("Fail")
 				cfg.t.Fatalf("expected no leader, but %v claims to be leader", i)
 			}
 		}

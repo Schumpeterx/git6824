@@ -8,17 +8,49 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
-import "fmt"
-import "time"
-import "math/rand"
-import "sync/atomic"
-import "sync"
+import (
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"math/rand"
+	"os"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
 const RaftElectionTimeout = 1000 * time.Millisecond
 
+var logfile *string
+var logFiles *os.File
+
+func TestMain(m *testing.M) {
+	setup()
+	ret := m.Run()
+	teardown()
+	os.Exit(ret)
+}
+func setup() {
+	logfile = flag.String("log", "test.log", "Log file name")
+	logFile, logErr := os.OpenFile(*logfile, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+	logFiles = logFile
+	if logErr != nil {
+		fmt.Println("Fail to find", *logFile, "test start Failed")
+		os.Exit(1)
+	}
+	multiWriter := io.MultiWriter(os.Stdout, logFile)
+	log.SetOutput(multiWriter)
+	log.SetFlags(log.Ldate | log.Ltime)
+	//write log
+	log.Println("Test strat!")
+}
+func teardown() {
+	logFiles.Close()
+}
 func TestInitialElection2A(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
