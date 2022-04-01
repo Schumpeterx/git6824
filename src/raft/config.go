@@ -170,6 +170,7 @@ func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 				err_msg = fmt.Sprintf("server %v apply out of order %v", i, m.CommandIndex)
 			}
 			if err_msg != "" {
+				DPrintf("apply error: %v\n", err_msg)
 				log.Fatalf("apply error: %v\n", err_msg)
 				cfg.applyErr[i] = err_msg
 				// keep reading after error so that Raft doesn't block
@@ -195,6 +196,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 				d := labgob.NewDecoder(r)
 				var v int
 				if d.Decode(&v) != nil {
+					DPrintf("decode error\n")
 					log.Fatalf("decode error\n")
 				}
 				cfg.logs[i][m.SnapshotIndex] = v
@@ -210,6 +212,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 				err_msg = fmt.Sprintf("server %v apply out of order %v", i, m.CommandIndex)
 			}
 			if err_msg != "" {
+				DPrintf("apply error: %v\n", err_msg)
 				log.Fatalf("apply error: %v\n", err_msg)
 				cfg.applyErr[i] = err_msg
 				// keep reading after error so that Raft doesn't block
@@ -390,6 +393,7 @@ func (cfg *config) checkOneLeader() int {
 		lastTermWithLeader := -1
 		for term, leaders := range leaders {
 			if len(leaders) > 1 {
+				DPrintf("term %d has %d (>1) leaders", term, len(leaders))
 				cfg.t.Fatalf("term %d has %d (>1) leaders", term, len(leaders))
 			}
 			if term > lastTermWithLeader {
@@ -402,7 +406,6 @@ func (cfg *config) checkOneLeader() int {
 		}
 	}
 	DPrintf("expected one leader, got none")
-	DPrintf("Fail")
 	cfg.t.Fatalf("expected one leader, got none")
 	return -1
 }
@@ -417,7 +420,6 @@ func (cfg *config) checkTerms() int {
 				term = xterm
 			} else if term != xterm {
 				DPrintf("servers disagree on term")
-				DPrintf("Fail")
 				cfg.t.Fatalf("servers disagree on term")
 			}
 		}
@@ -432,7 +434,6 @@ func (cfg *config) checkNoLeader() {
 			_, is_leader := cfg.rafts[i].GetState()
 			if is_leader {
 				DPrintf("expected no leader, but %v claims to be leader", i)
-				DPrintf("Fail")
 				cfg.t.Fatalf("expected no leader, but %v claims to be leader", i)
 			}
 		}
@@ -454,6 +455,8 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 
 		if ok {
 			if count > 0 && cmd != cmd1 {
+				DPrintf("committed values do not match: index %v, %v, %v\n",
+					index, cmd, cmd1)
 				cfg.t.Fatalf("committed values do not match: index %v, %v, %v\n",
 					index, cmd, cmd1)
 			}
@@ -489,6 +492,8 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 	}
 	nd, cmd := cfg.nCommitted(index)
 	if nd < n {
+		DPrintf("only %d decided for index %d; wanted %d\n",
+			nd, index, n)
 		cfg.t.Fatalf("only %d decided for index %d; wanted %d\n",
 			nd, index, n)
 	}
@@ -546,12 +551,14 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {
+				DPrintf("one(%v) failed to reach agreement", cmd)
 				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 			}
 		} else {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
+	DPrintf("one(%v) failed to reach agreement", cmd)
 	cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	return -1
 }
@@ -585,6 +592,10 @@ func (cfg *config) end() {
 
 		fmt.Printf("  ... Passed --")
 		fmt.Printf("  %4.1f  %d %4d %7d %4d\n", t, npeers, nrpc, nbytes, ncmds)
+		DPrintf("  ... Passed --")
+		DPrintf("  %4.1f  %d %4d %7d %4d\n", t, npeers, nrpc, nbytes, ncmds)
+	} else {
+		DPrintf("FAIL")
 	}
 }
 

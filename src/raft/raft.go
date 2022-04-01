@@ -38,7 +38,7 @@ const (
 // return a random time duration
 func randomTime() time.Duration {
 	rand.Seed(time.Now().UnixNano())
-	r := 2*HEARTBEAT + rand.Intn(100)
+	r := 2*HEARTBEAT + rand.Intn(50)
 	return time.Duration(r) * time.Millisecond
 }
 func trySendChan(c chan struct{}) {
@@ -313,9 +313,7 @@ func (rf *Raft) elect() {
 			LastLogIndex: rf.getLastLogIndex(),
 			LastLogTerm:  rf.log[len(rf.log)-1].Term,
 		}
-		reply := &RequestVoteReply{
-			SendTerm: rf.currentTerm,
-		}
+		reply := &RequestVoteReply{}
 		rf.mu.Unlock()
 		go func(reply *RequestVoteReply, server int) {
 			ok := rf.sendRequestVote(server, args, reply)
@@ -395,6 +393,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	DPrintf("Server[%v] send vote request to Server[%v], args=%+v, reply=%+v", rf.me, server, args, reply)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	reply.SendTerm = args.Term
 	return ok
 }
 
@@ -410,7 +409,6 @@ func (rf *Raft) broadcastAppendEntries(isHeartbeat bool) {
 			Entries:      nil,
 			LeaderCommit: rf.commitIndex,
 		}
-		term := rf.currentTerm
 		state := rf.state
 		rf.mu.Unlock()
 		if state != LEADER {
@@ -420,9 +418,7 @@ func (rf *Raft) broadcastAppendEntries(isHeartbeat bool) {
 			if server == rf.me {
 				continue
 			}
-			reply := &AppendEntriesReply{
-				SendTerm: term,
-			}
+			reply := &AppendEntriesReply{}
 			go func(reply *AppendEntriesReply, server int) {
 				ok := rf.sendAppendEntries(server, args, reply)
 				if ok {
@@ -435,7 +431,7 @@ func (rf *Raft) broadcastAppendEntries(isHeartbeat bool) {
 		// ...
 		for server := 0; server < len(rf.peers); server++ {
 			if server != rf.me {
-				trySendChan(rf.aeChan[server])
+				go trySendChan(rf.aeChan[server])
 			}
 		}
 	}
@@ -463,9 +459,7 @@ func (rf *Raft) aeSender(c chan struct{}, server int) {
 			Entries:      entries,
 			LeaderCommit: rf.commitIndex,
 		}
-		reply := &AppendEntriesReply{
-			SendTerm: rf.currentTerm,
-		}
+		reply := &AppendEntriesReply{}
 		rf.mu.Unlock()
 		ok := rf.sendAppendEntries(server, args, reply)
 		if !ok {
@@ -514,13 +508,16 @@ func (rf *Raft) handleAppendEntriesReply(args *AppendEntriesArgs, reply *AppendE
 		if rf.matchIndex[server] < args.PrevLogIndex+len(args.Entries) {
 			rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)
 		}
+		if rf.matchIndex[server]+1 != rf.nextIndex[server] {
+			trySendChan(rf.aeChan[server])
+		}
 		if oldMatchIndex == rf.matchIndex[server] {
 			return
 		}
 		// update commit index
 		cnt := 1
 		newCommit := rf.matchIndex[server]
-		if rf.commitIndex < newCommit {
+		if rf.commitIndex < newCommit && rf.currentTerm == reply.Term {
 			for s := 0; s < len(rf.peers); s++ {
 				if s != rf.me {
 					if rf.matchIndex[s] >= newCommit {
@@ -571,12 +568,12 @@ func (rf *Raft) handleAppendEntriesReply(args *AppendEntriesArgs, reply *AppendE
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	defer DPrintf("Server[%v] reply append entries request to Server[%v], args={%+v}, reply={%+v}", rf.me, args.LeaderId, args, reply)
 	if len(args.Entries) > 0 {
+		defer DPrintf("Server[%d]\033[1;32;42m%+v\033[0m reply to append request %+v with reply %+v", rf.me, rf, args, reply)
 		DPrintf("Server[%v] receive append entries request from Server[%v], args={%+v}", rf.me, args.LeaderId, args)
 		rf.printState()
 	}
-	DPrintf("Server[%v] receive append entries request from Server[%v], args={%+v}, reply=%+v", rf.me, args.LeaderId, args, reply)
+	// DPrintf("Server[%v] receive append entries request from Server[%v], args={%+v}, reply=%+v", rf.me, args.LeaderId, args, reply)
 	if rf.currentTerm < args.Term {
 		rf.toFollower(args.Term, -1)
 	}
@@ -617,6 +614,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			break
 		}
 	}
+	if index == len(rf.log) {
+		newLog = true
+	}
 	if newLog {
 		rf.log = rf.log[:pli+1]
 		rf.log = append(rf.log, args.Entries...)
@@ -632,6 +632,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		DPrintf("Server[%v] send append entries request to Server[%v], args=%+v, reply=%+v", rf.me, server, args, reply)
 	}
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	reply.SendTerm = args.Term
 	return ok
 }
 
@@ -649,7 +650,7 @@ func (rf *Raft) updateApplied() {
 			}
 			rf.mu.Unlock()
 			rf.applyChan <- applyMsg
-			DPrintf("Server[%v] apply Command{%+v}", rf.me, applyMsg)
+			DPrintf("\033[1;35;45mServer[%v] apply Command{%+v}\033[0m", rf.me, applyMsg)
 			rf.mu.Lock()
 			// persist
 			// ...
@@ -680,6 +681,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	term = rf.currentTerm
 	if rf.state == LEADER {
 		isLeader = true
 		newLog := Log{

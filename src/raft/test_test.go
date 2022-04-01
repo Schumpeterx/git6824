@@ -66,6 +66,7 @@ func TestInitialElection2A(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	term1 := cfg.checkTerms()
 	if term1 < 1 {
+		DPrintf("term is %v, but should be at least 1", term1)
 		t.Fatalf("term is %v, but should be at least 1", term1)
 	}
 
@@ -162,11 +163,13 @@ func TestBasicAgree2B(t *testing.T) {
 	for index := 1; index < iters+1; index++ {
 		nd, _ := cfg.nCommitted(index)
 		if nd > 0 {
+			DPrintf("some have committed before Start()")
 			t.Fatalf("some have committed before Start()")
 		}
 
 		xindex := cfg.one(index*100, servers, false)
 		if xindex != index {
+			DPrintf("got index %v but expected %v", xindex, index)
 			t.Fatalf("got index %v but expected %v", xindex, index)
 		}
 	}
@@ -194,6 +197,7 @@ func TestRPCBytes2B(t *testing.T) {
 		cmd := randstring(5000)
 		xindex := cfg.one(cmd, servers, false)
 		if xindex != index {
+			DPrintf("got index %v but expected %v", xindex, index)
 			t.Fatalf("got index %v but expected %v", xindex, index)
 		}
 		sent += int64(len(cmd))
@@ -203,6 +207,7 @@ func TestRPCBytes2B(t *testing.T) {
 	got := bytes1 - bytes0
 	expected := int64(servers) * sent
 	if got > expected+50000 {
+		DPrintf("too many RPC bytes; got %v, expected %v", got, expected)
 		t.Fatalf("too many RPC bytes; got %v, expected %v", got, expected)
 	}
 
@@ -260,9 +265,11 @@ func TestFailNoAgree2B(t *testing.T) {
 
 	index, _, ok := cfg.rafts[leader].Start(20)
 	if ok != true {
+		DPrintf("leader rejected Start()")
 		t.Fatalf("leader rejected Start()")
 	}
 	if index != 2 {
+		DPrintf("expected index 2, got %v", index)
 		t.Fatalf("expected index 2, got %v", index)
 	}
 
@@ -270,6 +277,7 @@ func TestFailNoAgree2B(t *testing.T) {
 
 	n, _ := cfg.nCommitted(index)
 	if n > 0 {
+		DPrintf("%v committed but no majority", n)
 		t.Fatalf("%v committed but no majority", n)
 	}
 
@@ -283,9 +291,11 @@ func TestFailNoAgree2B(t *testing.T) {
 	leader2 := cfg.checkOneLeader()
 	index2, _, ok2 := cfg.rafts[leader2].Start(30)
 	if ok2 == false {
+		DPrintf("leader2 rejected Start()")
 		t.Fatalf("leader2 rejected Start()")
 	}
 	if index2 < 2 || index2 > 3 {
+		DPrintf("unexpected index %v", index2)
 		t.Fatalf("unexpected index %v", index2)
 	}
 
@@ -358,6 +368,7 @@ loop:
 				}
 				cmds = append(cmds, ix)
 			} else {
+				DPrintf("value %v is not an int", cmd)
 				t.Fatalf("value %v is not an int", cmd)
 			}
 		}
@@ -380,6 +391,7 @@ loop:
 				}
 			}
 			if ok == false {
+				DPrintf("cmd %v missing in %v", x, cmds)
 				t.Fatalf("cmd %v missing in %v", x, cmds)
 			}
 		}
@@ -389,6 +401,7 @@ loop:
 	}
 
 	if !success {
+		DPrintf("term changed too often")
 		t.Fatalf("term changed too often")
 	}
 
@@ -524,6 +537,7 @@ func TestCount2B(t *testing.T) {
 	total1 := rpcs()
 
 	if total1 > 30 || total1 < 1 {
+		DPrintf("too many or few RPCs (%v) to elect initial leader\n", total1)
 		t.Fatalf("too many or few RPCs (%v) to elect initial leader\n", total1)
 	}
 
@@ -559,6 +573,7 @@ loop:
 				continue loop
 			}
 			if starti+i != index1 {
+				DPrintf("Start() failed")
 				t.Fatalf("Start() failed")
 			}
 		}
@@ -570,6 +585,7 @@ loop:
 					// term changed -- try again
 					continue loop
 				}
+				DPrintf("wrong value %v committed for index %v; expected %v\n", cmd, starti+i, cmds)
 				t.Fatalf("wrong value %v committed for index %v; expected %v\n", cmd, starti+i, cmds)
 			}
 		}
@@ -590,6 +606,7 @@ loop:
 		}
 
 		if total2-total1 > (iters+1+3)*3 {
+			DPrintf("too many RPCs (%v) for %v entries\n", total2-total1, iters)
 			t.Fatalf("too many RPCs (%v) for %v entries\n", total2-total1, iters)
 		}
 
@@ -598,6 +615,7 @@ loop:
 	}
 
 	if !success {
+		DPrintf("term changed too often")
 		t.Fatalf("term changed too often")
 	}
 
@@ -609,6 +627,7 @@ loop:
 	}
 
 	if total3-total2 > 3*20 {
+		DPrintf("too many RPCs (%v) for 1 second of idleness\n", total3-total2)
 		t.Fatalf("too many RPCs (%v) for 1 second of idleness\n", total3-total2)
 	}
 
@@ -935,6 +954,7 @@ func internalChurn(t *testing.T, unreliable bool) {
 								values = append(values, x)
 							}
 						} else {
+							DPrintf("wrong command type")
 							cfg.t.Fatalf("wrong command type")
 						}
 						break
@@ -1013,6 +1033,7 @@ func internalChurn(t *testing.T, unreliable bool) {
 		if vi, ok := v.(int); ok {
 			really = append(really, vi)
 		} else {
+			DPrintf("not an int")
 			t.Fatalf("not an int")
 		}
 	}
@@ -1025,6 +1046,7 @@ func internalChurn(t *testing.T, unreliable bool) {
 			}
 		}
 		if ok == false {
+			DPrintf("didn't find a value")
 			cfg.t.Fatalf("didn't find a value")
 		}
 	}
@@ -1077,6 +1099,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		cfg.one(rand.Int(), servers-1, true)
 
 		if cfg.LogSize() >= MAXLOGSIZE {
+			DPrintf("Log size too large")
 			cfg.t.Fatalf("Log size too large")
 		}
 		if disconnect {

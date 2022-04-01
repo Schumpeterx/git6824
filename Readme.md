@@ -53,24 +53,34 @@ log的编号为逻辑上的编号，log的下标为log的真实下标，对应�
 2. 到协程对应的chan上有值时，说明有AE包需要发送，那么协程负责发送AE包以及处理请求
 3. 处理完毕后，协程重新监听chan
 4. 当有新的log，或者心跳检测返回false时，需要给follower发送AE包，这时候尝试往chan中放入一个信号，如果失败，说明chan中已经有信号了，无需阻塞等待。
-5. 收到Ae包返回时，如果为false，在log中从后向前找到conflict term第一次出现的下标，再加1作为next index；如果没找到这样的下标，nextIndex = conflictIndex, 再次发送AE包； 如果为true，说明这个包成功append log到follower上，更新`matchIndex = prevLogIndex + len(Entries)； nextIndex = matchIndex + 1`
+5. 收到Ae包返回时，如果为false，在log中从后向前找到conflict term第一次出现的下标，再加1作为next index；如果没找到这样的下标，nextIndex = conflictIndex, 再次发送AE包； 如果为true，说明这个包成功append log到follower上，更新`matchIndex = prevLogIndex + len(Entries)； nextIndex = matchIndex + 1`,并且Leader只能提交当前Term的log。
 
 ### 更新lastApplied
 每个peer都有一个协程专门负责更新lastApplied，以及将刚刚apply的log发送套applyChan中，上报给Tester或者Service，然后进行持久化(Lab 2C）； 每当peer的commit index改变时，通知该协程更新lastApplied。
 
 ### BUG
 1. 在发送请求时，警告`labgob warning: Decoding into a non-default variable/field SendTerm may not work`。查询labgob源码发现：
-``` go
-				// this warning typically arises if code re-uses the same RPC reply
-				// variable for multiple RPC calls, or if code restores persisted
-				// state into variable that already have non-default values.
-				fmt.Printf("labgob warning: Decoding into a non-default variable/field %v may not work\n",
-					what)
-```
-意思是对多个RPC调用使用了同一个reply。打Log发现：
-```
-2022/04/01 17:10:26 Server[2] aeSender send AppendEntries to Server[1], args={&{Term:1 LeaderId:2 PrevLogIndex:0 PrevLogTerm:0 Entries:[] LeaderCommit:0}}, reply=&{SendTerm:1 Term:0 Success:false ConflictTerm:0 ConflictIndex:0}
+    ``` go
+                    // this warning typically arises if code re-uses the same RPC reply
+                    // variable for multiple RPC calls, or if code restores persisted
+                    // state into variable that already have non-default values.
+                    fmt.Printf("labgob warning: Decoding into a non-default variable/field %v may not work\n",
+                        what)
+    ```
+    意思是对多个RPC调用使用了同一个reply。打Log发现：
+    ```
+    2022/04/01 17:10:26 Server[2] aeSender send AppendEntries to Server[1], args={&{Term:1 LeaderId:2 PrevLogIndex:0 PrevLogTerm:0 Entries:[] LeaderCommit:0}}, reply=&{SendTerm:1 Term:0 Success:false ConflictTerm:0 ConflictIndex:0}
 
-2022/04/01 17:10:26 Server[1] receive append entries request from Server[2], args={&{Term:1 LeaderId:2 PrevLogIndex:0 PrevLogTerm:0 Entries:[] LeaderCommit:0}}, reply=&{SendTerm:0 Term:0 Success:false ConflictTerm:0 ConflictIndex:0}
-```
-follower收到的reply的SendTerm变成了默认的0值。
+    2022/04/01 17:10:26 Server[1] receive append entries request from Server[2], args={&{Term:1 LeaderId:2 PrevLogIndex:0 PrevLogTerm:0 Entries:[] LeaderCommit:0}}, reply=&{SendTerm:0 Term:0 Success:false ConflictTerm:0 ConflictIndex:0}
+    ```
+    follower收到的reply的SendTerm变成了默认的0值。分析后发现在在RPC调用前，修改reply的值，RPC的接收方是看不到的。所以需要在RPC调用完成后，再修改reply中的SendTerm。
+2. TestConcurrentStarts2B和TestCount2B都因为`test_test.go:601: term changed too often`错误而退出。刚开始还以为是日志发送速度太慢了。后来偶然发现是因为在`Start`函数里没有给`term`赋值导致。具体原因：
+    ``` go
+    _, term, ok := cfg.rafts[leader].Start(1)
+    // ...
+    if t, _ := cfg.rafts[j].GetState(); t != term {
+        // term changed -- can't expect low RPC counts
+        continue loop
+    }
+    ```
+    第一行读取term，由于没有赋值，为0. 然后中间发送log给Leader，然后检查leader的term是否改变。这里，`GetState`能够正常取到Leader的term=1。导致重新开始循环，无法修改success参数，从而失败。

@@ -5,7 +5,7 @@ import (
 )
 
 // Debugging
-const Debug = true
+const Debug = false
 
 // var logfile = flag.String("log", "test.log", "test")
 func DPrintf(format string, a ...interface{}) (n int, err error) {
