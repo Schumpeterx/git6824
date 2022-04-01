@@ -35,3 +35,42 @@ log的编号为逻辑上的编号，log的下标为log的真实下标，对应�
 1. Candidate晋升Leader后，马上开启心跳广播
 2. 接收心跳广播的返回，如果返回term大于自己的term，说明有新的leader，转变成follower。
 <!-- 3. 如果Success = false； 寻找log中term = Term的最大的下标，如果不存在，nextIndex = conflictIndex -->
+## Lab 2B
+主要关注日志复制、快速发送日志以及commitIndex和appliedIndex的更新
+### Follower
+收到AE请求后，进行相应的处理，然后返回结果
+1. 对比term，检查是否需要更新term
+2. 检查prevlogindex以及prevlogterm。 其中1和2项说明有冲突，直接返回false。并且1、2项在心跳包中也要进行检查。
+    1. 如果在prevlogindex没有日志，那么，conflict index=len(log)，conflict term=-1. 
+    2. 如果在prev log index有日志，但是term不匹配，conflict term = log[prevlogindex].term，然后，找到conflict term在log中第一次出现的下标，作为conflictindex返回。
+    3. 如果在prev log index有日志，并且term匹配。那么，向后检查，request中的log是否与本地log匹配，如果完全匹配，说明这个请求是过期的。如果不完全匹配，重新进行匹配。success=true；
+3. 检查请求中的commitIndex是不是大于自己的commitIndex，如果是，要更新commitIndex：
+    `commitIndex = Math.min(leaderCommitIndex, new log Index)`。心跳包也要做此检查。
+    
+### Leader
+为每个follower都维护一个协程，负责往对应的follower发送AE包，以及处理AE返回。
+1. 每个协程监听一个对应的chan，chan的缓冲区大小为1。`[]chan interface{}`
+2. 到协程对应的chan上有值时，说明有AE包需要发送，那么协程负责发送AE包以及处理请求
+3. 处理完毕后，协程重新监听chan
+4. 当有新的log，或者心跳检测返回false时，需要给follower发送AE包，这时候尝试往chan中放入一个信号，如果失败，说明chan中已经有信号了，无需阻塞等待。
+5. 收到Ae包返回时，如果为false，在log中从后向前找到conflict term第一次出现的下标，再加1作为next index；如果没找到这样的下标，nextIndex = conflictIndex, 再次发送AE包； 如果为true，说明这个包成功append log到follower上，更新`matchIndex = prevLogIndex + len(Entries)； nextIndex = matchIndex + 1`
+
+### 更新lastApplied
+每个peer都有一个协程专门负责更新lastApplied，以及将刚刚apply的log发送套applyChan中，上报给Tester或者Service，然后进行持久化(Lab 2C）； 每当peer的commit index改变时，通知该协程更新lastApplied。
+
+### BUG
+1. 在发送请求时，警告`labgob warning: Decoding into a non-default variable/field SendTerm may not work`。查询labgob源码发现：
+``` go
+				// this warning typically arises if code re-uses the same RPC reply
+				// variable for multiple RPC calls, or if code restores persisted
+				// state into variable that already have non-default values.
+				fmt.Printf("labgob warning: Decoding into a non-default variable/field %v may not work\n",
+					what)
+```
+意思是对多个RPC调用使用了同一个reply。打Log发现：
+```
+2022/04/01 17:10:26 Server[2] aeSender send AppendEntries to Server[1], args={&{Term:1 LeaderId:2 PrevLogIndex:0 PrevLogTerm:0 Entries:[] LeaderCommit:0}}, reply=&{SendTerm:1 Term:0 Success:false ConflictTerm:0 ConflictIndex:0}
+
+2022/04/01 17:10:26 Server[1] receive append entries request from Server[2], args={&{Term:1 LeaderId:2 PrevLogIndex:0 PrevLogTerm:0 Entries:[] LeaderCommit:0}}, reply=&{SendTerm:0 Term:0 Success:false ConflictTerm:0 ConflictIndex:0}
+```
+follower收到的reply的SendTerm变成了默认的0值。

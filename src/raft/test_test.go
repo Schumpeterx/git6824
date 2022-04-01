@@ -46,7 +46,7 @@ func setup() {
 	log.SetOutput(multiWriter)
 	log.SetFlags(log.Ldate | log.Ltime)
 	//write log
-	log.Println("Test strat!")
+	// log.Println("Test strat!")
 }
 func teardown() {
 	logFiles.Close()
