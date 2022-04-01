@@ -31,6 +31,7 @@ log的编号为逻辑上的编号，log的下标为log的真实下标，对应�
 1. 选举超时，发起选举，转变成Candidate，给自己先投一票，然后广播投票
 2. 收到投票结果，首先检查term是否大于自己。如果是，则更新自己的term，转成follower
 3. 然后检查投票结果是否过期以及自己是不是还是Candidate，如果不是，丢弃结果。如果是，检查是不是已经获得大多数投票。是的话，就可以晋升Leader。
+4. 收到AE包，检查Term是否大于等于自己，是，则自己转为Follower，停止选举。
 ### Leader
 1. Candidate晋升Leader后，马上开启心跳广播
 2. 接收心跳广播的返回，如果返回term大于自己的term，说明有新的leader，转变成follower。
