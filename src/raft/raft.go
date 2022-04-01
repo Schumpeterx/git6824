@@ -574,7 +574,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.printState()
 	}
 	// DPrintf("Server[%v] receive append entries request from Server[%v], args={%+v}, reply=%+v", rf.me, args.LeaderId, args, reply)
-	if rf.currentTerm < args.Term {
+	if rf.currentTerm < args.Term || rf.state == CANDIDATE && rf.currentTerm == args.Term {
 		rf.toFollower(args.Term, -1)
 	}
 	reply.Term = rf.currentTerm
