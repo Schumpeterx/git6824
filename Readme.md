@@ -17,6 +17,48 @@ log的编号为逻辑上的编号，log的下标为log的真实下标，对应�
 `lastIncludedIndex + len(log) - 1`
 日志的第一条log的逻辑编号
 `lastIncludedIndex + 1`
+## 关于bug
+实验中产生bug很大一部分都是因为没有遵守论文或者guide的要求，所以，论文和guide需要熟读，需要尊重论文的设计，不能随意简化，细节非常重要。还有一部分是因为加锁后提前返回忘记释放锁导致死锁，最好是在加锁后跟上`defer rf.mu.Unlock`来释放锁。
+发生bug基本都是由于代码编写有问题。有些bug需要测很多次才会出现，一两次通过test不能代表代码没有问题，不要心存侥幸，对于这种bug，最好是多次测试，打log来记录。
+## 关于Debug
+在写实验时，打log查bug是唯一的方式。最好把每次Test的log都保存到文件中，方便debug。
+util.go中提供了DPrintf工具来打log，可以进一步修改，使他更符合需求。
+```go
+// test_test.go
+var logfile *string
+var logFiles *os.File
+
+func TestMain(m *testing.M) {
+	setup()
+	ret := m.Run()
+	teardown()
+	os.Exit(ret)
+}
+func setup() {
+	logfile = flag.String("log", "log/test.log", "Log file name")
+	logFile, logErr := os.OpenFile(*logfile, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+	logFiles = logFile
+	if logErr != nil {
+		fmt.Println("Fail to find", *logFile, "test start Failed")
+		os.Exit(1)
+	}
+	multiWriter := io.MultiWriter(os.Stdout, logFile)
+	log.SetOutput(multiWriter)
+	log.SetFlags(log.Ldate | log.Ltime)
+	//write log
+	// log.Println("Test strat!")
+}
+func teardown() {
+	logFiles.Close()
+}
+```
+上面的代码修改test_test.go文件。在每次测试开始时，设置log打印的方式。我这里是把log保存到log/test.log中，同时显示在终端上。
+同时，在输出日志时，还可以添加更多细节，比如颜色来凸显重要的日志。
+```go
+	DPrintf("\033[1;31;40mServer[%v] state change, from %v to Leader\033[0m", rf.me, rf.state)
+```
+比如这一句，通过\033[1;31;40m 和 \033[0m来调整日志的颜色。详细可参考链接：https://zhuanlan.zhihu.com/p/76751728
+如果想打印结构体，将`%v`改成`%+v`就可以了。
 ## Lab 2A
 严格按照Figure 2来写。
 ### Follower
@@ -35,6 +77,7 @@ log的编号为逻辑上的编号，log的下标为log的真实下标，对应�
 ### Leader
 1. Candidate晋升Leader后，马上开启心跳广播
 2. 接收心跳广播的返回，如果返回term大于自己的term，说明有新的leader，转变成follower。
+3. 如果心跳RPC失败，为了防止选举，要重新发送心跳
 <!-- 3. 如果Success = false； 寻找log中term = Term的最大的下标，如果不存在，nextIndex = conflictIndex -->
 ## Lab 2B
 主要关注日志复制、快速发送日志以及commitIndex和appliedIndex的更新
@@ -85,3 +128,16 @@ log的编号为逻辑上的编号，log的下标为log的真实下标，对应�
     }
     ```
     第一行读取term，由于没有赋值，为0. 然后中间发送log给Leader，然后检查leader的term是否改变。这里，`GetState`能够正常取到Leader的term=1。导致重新开始循环，无法修改success参数，从而失败。
+## Lab 2C
+主要任务是持久化，每次持久化状态改变时，都要进行持久化。由于不能重复给Tester提供同一条Command，所以lastApplied也需要持久化。同时，2D中的lastInculudedIndex和Term都需要持久化。
+需要持久化的字段如下：
+1. currentTerm
+2. votedFor
+3. log[]
+4. lastApplied
+5. lastIncludedIndex and lastIncludedTerm
+
+persist()和readPersist():两个函数中，变量的保存和读取顺序必须是一样的，否则读取会出现错误。
+测试code
+`for i in {0..10}; do go test -run 2C -race; done`
+还可以同时开多个终端一起测试

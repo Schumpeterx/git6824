@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 	os.Exit(ret)
 }
 func setup() {
-	logfile = flag.String("log", "test.log", "Log file name")
+	logfile = flag.String("log", "log/test.log", "Log file name")
 	logFile, logErr := os.OpenFile(*logfile, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
 	logFiles = logFile
 	if logErr != nil {
