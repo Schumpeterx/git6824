@@ -311,6 +311,7 @@ func (cfg *config) cleanup() {
 // attach server i to the net.
 func (cfg *config) connect(i int) {
 	// fmt.Printf("connect(%d)\n", i)
+	defer DPrintf("\033[5;42;30mConnect[%d]\033[0m", i)
 
 	cfg.connected[i] = true
 
@@ -334,7 +335,7 @@ func (cfg *config) connect(i int) {
 // detach server i from the net.
 func (cfg *config) disconnect(i int) {
 	// fmt.Printf("disconnect(%d)\n", i)
-
+	defer DPrintf("\033[1;37;41mDisconnect[%d]\033[0m", i)
 	cfg.connected[i] = false
 
 	// outgoing ClientEnds

@@ -1,4 +1,58 @@
 # Lab 2
+## 时间
+```
+Test (2A): initial election ...
+  ... Passed --   3.1  3   60   17050    0
+Test (2A): election after network failure ...
+  ... Passed --   4.4  3  139   25496    0
+Test (2A): multiple elections ...
+  ... Passed --   5.6  7  807  143600    0
+Test (2B): basic agreement ...
+  ... Passed --   0.8  3   20    5668    3
+Test (2B): RPC byte count ...
+  ... Passed --   2.3  3   68  120080   11
+Test (2B): agreement despite follower disconnection ...
+  ... Passed --   3.8  3  100   25149    7
+Test (2B): no agreement if too many followers disconnect ...
+  ... Passed --   3.5  5  254   49354    3
+Test (2B): concurrent Start()s ...
+  ... Passed --   0.6  3   18    5156    6
+Test (2B): rejoin of partitioned leader ...
+  ... Passed --   2.3  3   86   20454    4
+Test (2B): leader backs up quickly over incorrect follower logs ...
+  ... Passed --  13.2  5 1455  940261  102
+Test (2B): RPC counts aren't too high ...
+  ... Passed --   2.1  3   48   13824   12
+Test (2C): basic persistence ...
+  ... Passed --   3.4  3   97   23817    6
+Test (2C): more persistence ...
+  ... Passed --  15.7  5 1123  227165   16
+Test (2C): partitioned leader and one follower crash, leader restarts ...
+  ... Passed --   1.4  3   38    9309    4
+Test (2C): Figure 8 ...
+  ... Passed --  35.9  5  672   95124   10
+Test (2C): unreliable agreement ...
+  ... Passed --   5.4  5  699  217384  246
+Test (2C): Figure 8 (unreliable) ...
+  ... Passed --  32.1  5 2265  325184   98
+Test (2C): churn ...
+  ... Passed --  16.4  5 1470  779832  238
+Test (2C): unreliable churn ...
+  ... Passed --  16.4  5 1092  384125  112
+Test (2D): snapshots basic ...
+  ... Passed --   6.6  3  379  122951  251
+Test (2D): install snapshots (disconnect) ...
+  ... Passed --  45.6  3 1294  345331  355
+Test (2D): install snapshots (disconnect+unreliable) ...
+  ... Passed --  53.6  3 1670  415089  366
+Test (2D): install snapshots (crash) ...
+  ... Passed --  37.0  3  953  264415  410
+Test (2D): install snapshots (unreliable+crash) ...
+  ... Passed --  41.6  3 1117  291679  355
+PASS
+ok      6.824/raft      353.904s
+go test -race  105.19s user 12.25s system 33% cpu 5:54.20 total
+```
 ## 总体设计
 ### 选举
 选举超时计时器过期后，发起选举。
@@ -141,3 +195,20 @@ persist()和readPersist():两个函数中，变量的保存和读取顺序必须
 测试code
 `for i in {0..10}; do go test -run 2C -race; done`
 还可以同时开多个终端一起测试
+## Lab 2D
+日志压缩。 每个Server相对独立的建立快照snapshot，也就是删除lastIncludedIndex及之前的log。当某个server远落后于leader的时候，leader还要将自己的快照发给这个server，让它跟上来。
+在关于user和raft的交互中，论文和实验说明中的方法有一点区别。论文中，follower在接到leader的snapshot后，检查自己的log中是否有比snapshot更新的log，有，则需要保留这些新log，删除snapshot中已经存在的log。在实验说明中，follower在接到leader的snapshot之后，首先需要把这个snapshot发送到user，user再发送回raft，然后raft判断自己的log中有没有apply比这个snapshot更新的log，如果有，则丢弃这个snapshot，如果没有，则承认它。论文和实验说明的区别在于，论文中follower有可能需要向user发送一个新的snapshot，而实验中只需发送leader给的snapshot就行。
+Raft在丢弃log时，注意要采用copy的方式进行，这样，go可以对丢弃的log空间进行回收。
+raft通过persister.snapshot来获取snapshot
+### User 和 Raft的交互
+在Lab 2D中，user和raft有两种交互的接口：
+1. `Snapshot(index int, snapshot []byte)`
+    它由user主动触发。user从applyChan收到9个command后，调用一次Snapshot，通知raft进行snapshot。
+2. `CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool`
+    发送快照给raft，raft判断根据这个快照能不能删除自己的log，如果可以，则删除log，应用快照，并返回true。否则返回false；当返回true后，user就知道这个快照可以应用。
+### Raft之间的交互
+Leader通过`InstallSnapshot`发送RPC调用给follower。follower判断是否需要删除日志。这里，仍然用`aeSender`，也就是负责发送AE的协程，来发送`InstallSnapshot`，因为`InstallSnapshot`和`AppendEntries`只需要同时发送其中一种。
+### Leader
+1. 发现某个server的 nextIndex <= lastIncludedIndex， 表示要发给这个server的log，已经有一部分被删除了(小于等于lastIncludedIndex的部分)，这时候需要发送快照snapshot给server。
+### Follower
+1. follower接到snapshot后，首先要比较term，如果snapshot的term旧，直接返回。然后通过applyChan发送给user。再等待user调用`CondInstallSnapshot`返回这个snapshot，然后再判断是否有比snapshot最后一个log更新的log，如果没有，就应用这个snapshot。并持久化。返回true，通知user应用这个snapshot。
