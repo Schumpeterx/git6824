@@ -267,7 +267,7 @@ func (rf *Raft) raftState() []byte {
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
-	e.Encode(rf.lastApplied)
+	// e.Encode(rf.lastApplied)
 	e.Encode(rf.lastIncludedIndex)
 	e.Encode(rf.lastIncludedTerm)
 	e.Encode(rf.log)
@@ -328,11 +328,12 @@ func (rf *Raft) readPersist(data []byte) {
 
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
-	var currentTerm, votedFor, lastApplied, lastIncludedIndex, lastIncludedTerm int
+	var currentTerm, votedFor, lastIncludedIndex, lastIncludedTerm int
+	// var lastApplied int
 	var log []Log
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
-		d.Decode(&lastApplied) != nil ||
+		// d.Decode(&lastApplied) != nil ||
 		d.Decode(&lastIncludedIndex) != nil ||
 		d.Decode(&lastIncludedTerm) != nil ||
 		d.Decode(&log) != nil {
@@ -341,9 +342,10 @@ func (rf *Raft) readPersist(data []byte) {
 	} else {
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
-		rf.lastApplied = lastApplied
+		// rf.lastApplied = lastApplied
 		rf.lastIncludedIndex = lastIncludedIndex
 		rf.lastIncludedTerm = lastIncludedTerm
+		rf.lastApplied = lastIncludedIndex
 		rf.log = log
 		DPrintf("\033[5;47;30mServer[%d] recover: %+v\033[0m", rf.me, rf)
 	}
@@ -399,6 +401,9 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.log = newLog
 	rf.lastIncludedIndex = index
 	rf.lastIncludedTerm = rf.log[0].Term
+	if rf.lastIncludedIndex > rf.lastApplied {
+		rf.lastApplied = rf.lastIncludedIndex
+	}
 	rf.log[0].Command = nil
 	rf.persister.SaveStateAndSnapshot(rf.raftState(), snapshot)
 }
@@ -850,15 +855,16 @@ func (rf *Raft) updateApplied() {
 				}
 			}
 		}
+		rf.lastApplied = rf.commitIndex
 		rf.mu.Unlock()
 		if len(msg) > 0 {
 			for i := 0; i < len(msg); i++ {
 				rf.applyChan <- msg[i]
-				rf.mu.Lock()
+				// rf.mu.Lock()
 				DPrintf("\033[1;35;45mServer[%v] apply Command{%+v}\033[0m", rf.me, msg[i])
-				rf.lastApplied++
-				rf.persist()
-				rf.mu.Unlock()
+				// rf.lastApplied++
+				// rf.persist()
+				// rf.mu.Unlock()
 			}
 		}
 		// for rf.lastApplied < rf.commitIndex {
@@ -895,7 +901,7 @@ func (rf *Raft) updateApplied() {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
-	isLeader := true
+	isLeader := false
 
 	// Your code here (2B).
 	rf.mu.Lock()
