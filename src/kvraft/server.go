@@ -1,15 +1,19 @@
 package kvraft
 
 import (
-	"6.824/labgob"
-	"6.824/labrpc"
-	"6.824/raft"
+	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+	"6.824/raft"
 )
 
 const Debug = false
+const WAIT_TIMEOUT = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -18,13 +22,22 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-}
+	Key   string
+	Value string
+	Op    string
 
+	RequestId int
+	UId       int64
+	Err       Err
+}
+type Answer struct {
+	Err   Err
+	Value string
+}
 type KVServer struct {
 	mu      sync.Mutex
 	me      int
@@ -35,15 +48,112 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	m             map[string]string
+	waitChan      map[string]chan Answer // key: uid + reqId +commandIndex
+	lastRequestId map[int64]int
 }
-
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	op := Op{Key: args.Key, Op: GET, UId: args.UId, RequestId: args.RequestId}
+	kv.DealRequest(&op)
+	reply.Err = op.Err
+	reply.Value = op.Value
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	kv.mu.Lock()
+	// use map's zero value property
+	if args.RequestId <= kv.lastRequestId[args.UId] {
+		reply.Err = OK
+		kv.mu.Unlock()
+		return
+	}
+	kv.mu.Unlock()
+	op := Op{Key: args.Key, Value: args.Value, Op: args.Op, UId: args.UId, RequestId: args.RequestId}
+	kv.DealRequest(&op)
+	reply.Err = op.Err
+}
+func (kv *KVServer) DealRequest(op *Op) {
+	index, _, isLeader := kv.rf.Start(*op)
+	DPrintf("Server[%d] deal request %+v", kv.me, op)
+	if !isLeader {
+		op.Err = ErrWrongLeader
+		return
+	}
+	// wait for apply
+	c := kv.getWaitChan(op.UId, op.RequestId, index)
+	select {
+	case answer := <-c:
+		op.Value = answer.Value
+		op.Err = answer.Err
+	case <-time.After(WAIT_TIMEOUT * time.Second):
+		op.Err = ErrWrongLeader
+	}
+	// delete wait chan
+	go kv.deleteWaitChan(op.UId, op.RequestId, index)
+}
+
+// in case of wrong leader, use uid + reqId + index as the key of each waitChan
+func (kv *KVServer) getWaitChan(uid int64, reqId, index int) chan Answer {
+	key := fmt.Sprint(uid) + "," + fmt.Sprint(reqId) + "," + fmt.Sprint(index)
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if c, ok := kv.waitChan[key]; !ok {
+		c = make(chan Answer, 1)
+		kv.waitChan[key] = c
+		return c
+	} else {
+		return c
+	}
+}
+func (kv *KVServer) deleteWaitChan(uid int64, reqId, index int) {
+	key := fmt.Sprint(uid) + "," + fmt.Sprint(reqId) + "," + fmt.Sprint(index)
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	delete(kv.waitChan, key)
+}
+func (kv *KVServer) fetchApply() {
+	for !kv.killed() {
+		command := <-kv.applyCh
+		DPrintf("Server[%d] fetch apply command %+v", kv.me, command)
+		if command.CommandValid {
+			op := command.Command.(Op)
+			index := command.CommandIndex
+			answer := Answer{}
+			kv.mu.Lock()
+			if op.RequestId <= kv.lastRequestId[op.UId] && op.Op != GET {
+				answer.Err = OK
+			} else {
+				if op.Op != GET {
+					if op.Op == PUT {
+						kv.m[op.Key] = op.Value
+					} else if op.Op == APPEND {
+						kv.m[op.Key] += op.Value
+					}
+					answer.Err = OK
+				} else {
+					if value, ok := kv.m[op.Key]; ok {
+						answer.Value = value
+						answer.Err = OK
+					} else {
+						answer.Err = ErrNoKey
+					}
+				}
+			}
+			if kv.lastRequestId[op.UId] < op.RequestId {
+				kv.lastRequestId[op.UId] = op.RequestId
+			}
+			kv.mu.Unlock()
+			_, isLeader := kv.rf.GetState()
+			if isLeader {
+				waitChan := kv.getWaitChan(op.UId, op.RequestId, index)
+				DPrintf("Server[%d] send answer to %+v", kv.me, op)
+				waitChan <- answer
+			}
+		}
+	}
 }
 
 //
@@ -96,6 +206,9 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
-
+	kv.m = make(map[string]string)
+	kv.lastRequestId = make(map[int64]int)
+	kv.waitChan = make(map[string]chan Answer)
+	go kv.fetchApply()
 	return kv
 }

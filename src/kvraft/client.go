@@ -1,13 +1,20 @@
 package kvraft
 
-import "6.824/labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"math/big"
+	"sync"
 
+	"6.824/labrpc"
+)
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	uid       int64
+	requestId int
+	leaderId  int
+	mu        sync.Mutex
 }
 
 func nrand() int64 {
@@ -20,6 +27,9 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	ck.uid = nrand()
+	ck.leaderId = 0
+	ck.requestId = 0
 	// You'll have to add code here.
 	return ck
 }
@@ -39,7 +49,31 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	return ""
+	ck.mu.Lock()
+	leader := ck.leaderId
+	ck.requestId++
+	ck.mu.Unlock()
+	oldLeader := leader
+	DPrintf("\033[0;42;30mClerk[%d] want get %s\033[0m", ck.uid, key)
+	for {
+		args := GetArgs{Key: key, UId: ck.uid, RequestId: ck.requestId}
+		reply := GetReply{}
+		ok := ck.servers[leader].Call("KVServer.Get", &args, &reply)
+		if !ok || reply.Err == ErrWrongLeader {
+			leader = (leader + 1) % len(ck.servers)
+			continue
+		}
+		DPrintf("\033[0;42;30mClerk[%d] get %s success\033[0m", ck.uid, key)
+		if oldLeader != leader {
+			ck.mu.Lock()
+			ck.leaderId = leader
+			ck.mu.Unlock()
+		}
+		if reply.Err == ErrNoKey {
+			return ""
+		}
+		return reply.Value
+	}
 }
 
 //
@@ -54,6 +88,28 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	ck.mu.Lock()
+	leader := ck.leaderId
+	ck.requestId++
+	ck.mu.Unlock()
+	oldLeader := leader
+	DPrintf("\033[0;42;30mClerk[%d] want %s (%s,%s)\033[0m", ck.uid, op, key, value)
+	for {
+		args := PutAppendArgs{Key: key, Value: value, Op: op, UId: ck.uid, RequestId: ck.requestId}
+		reply := PutAppendReply{}
+		ok := ck.servers[leader].Call("KVServer.PutAppend", &args, &reply)
+		if !ok || reply.Err != OK {
+			leader = (leader + 1) % len(ck.servers)
+			continue
+		}
+		if oldLeader != leader {
+			ck.mu.Lock()
+			ck.leaderId = leader
+			ck.mu.Unlock()
+		}
+		DPrintf("\033[0;42;30mClerk[%d] %s (%s,%s) success\033[0m", ck.uid, op, key, value)
+		return
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {

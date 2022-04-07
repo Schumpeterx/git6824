@@ -235,7 +235,7 @@ Leader通过`InstallSnapshot`发送RPC调用给follower。follower判断是否�
 ### 第二部分
 有network and server failures，以及多个client。这时候会出现许多问题
 1. client重复发送request：如果一个请求失败，client会重复发送直到请求成功。但是，如果raft已经接收到请求，并且已经commit，只是返回时失败了，这时候再次接到请求，就会错误地重复commit这个请求。
-2. server在收到请求，没有commit之前，从leader变成follower，这时候client需要重新寻找leader并重新发送请求。One way to do this is for the server to detect that it has lost leadership, by noticing that a different request has appeared at the index returned by Start()
+2. server在收到请求，没有commit之前，从leader变成follower，这时候client需要重新寻找leader并重新发送请求。此时可能出现的问题在于，在失败的leader上的请求可能会收到别的leader在同一个index上的apply，但这并不是它等待的apply。解决方法是，根据客户的id+请求id+apply index作为通知请求的标识符。
 #### 重复请求
 一个请求已经commit，这时候client再次发送这个请求，就会导致重复请求的情况。
 一个client一次只会发送一个请求，所以，在上一个请求没有成功返回之前，下一个请求不会发生。那么，对于重复的请求，有两种可能：
@@ -244,4 +244,3 @@ Leader通过`InstallSnapshot`发送RPC调用给follower。follower判断是否�
 如果client都给每一个独立请求都赋一个递增的id，server就可以通过这个id来判断请求是不是过期的。server记录下每一个client的**已经commit**的最大请求id，以及这个id的应答，如果收到一个id小的请求，那这个请求肯定是由于网络延时导致重发的，可以忽略。如果又收到相同id为最大id的请求，那么重新发送应答。对于不同client的请求，他们之间的顺序是不会影响的。
 新的问题是，如果leader更换了，新的leader如何得知每个client的最大请求id以及相应的应答。有一种情况会导致错误：在旧的leader提交了请求，但是由于旧leader网络partion，应答失败了。然后切换到新的leader，这个leader在收到重复请求后，就会重新提交请求。
 可以通过将请求的id保存到raft中解决这个问题。当旧leader提交请求后，其他raft上的server也会从raft上获取到这个请求，然后应用到自己的状态机上。当新leader出现后，收到重复请求就能过分辨出来。此外，当server重启后，raft重新apply它的log，那么server又能重新获取到请求提交的信息，防止提交重复请求。
-请求的ID需要包括请求的client编号或者
