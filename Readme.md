@@ -1,5 +1,5 @@
 # Lab 2
-## Test时间
+## Test耗时
 ```
 Test (2A): initial election ...
   ... Passed --   3.0  3   58   16474    0
@@ -184,12 +184,12 @@ func teardown() {
     ```
     第一行读取term，由于没有赋值，为0. 然后中间发送log给Leader，然后检查leader的term是否改变。这里，`GetState`能够正常取到Leader的term=1。导致重新开始循环，无法修改success参数，从而失败。
 ## Lab 2C
-主要任务是持久化，每次持久化状态改变时，都要进行持久化。由于不能重复给Tester提供同一条Command，所以lastApplied也需要持久化。同时，2D中的lastInculudedIndex和Term都需要持久化。
+主要任务是持久化，每次持久化状态改变时，都要进行持久化。同时，2D中的lastInculudedIndex和Term都需要持久化。
 需要持久化的字段如下：
 1. currentTerm
 2. votedFor
 3. log[]
-4. lastApplied
+<!-- 4. lastApplied -->
 5. lastIncludedIndex and lastIncludedTerm
 
 测试code
@@ -224,6 +224,62 @@ Leader通过`InstallSnapshot`发送RPC调用给follower。follower判断是否�
 4. 此时server就可以执行请求包含的指令。比如get、put等。
 5. server返回请求结果
 6. 当raft apply的log超过阈值后，server通知raft进行snapshot
+## Test耗时
+```
+Test: one client (3A) ...
+  ... Passed --  15.1  5  8991 1223
+Test: ops complete fast enough (3A) ...
+  ... Passed --   9.6  3  4442    0
+Test: many clients (3A) ...
+  ... Passed --  15.6  5  7094 1598
+Test: unreliable net, many clients (3A) ...
+  ... Passed --  16.2  5  5972 1039
+Test: concurrent append to same key, unreliable (3A) ...
+  ... Passed --   1.1  3   233   52
+Test: progress in majority (3A) ...
+  ... Passed --   0.3  5    54    2
+Test: no progress in minority (3A) ...
+  ... Passed --   1.0  5   203    3
+Test: completion after heal (3A) ...
+  ... Passed --   1.0  5    65    3
+Test: partitions, one client (3A) ...
+  ... Passed --  22.1  5  7677  936
+Test: partitions, many clients (3A) ...
+  ... Passed --  22.9  5  7475 1369
+Test: restarts, one client (3A) ...
+  ... Passed --  20.0  5  9333  994
+Test: restarts, many clients (3A) ...
+  ... Passed --  19.9  5 10388 1346
+Test: unreliable net, restarts, many clients (3A) ...
+  ... Passed --  20.8  5  6439  963
+Test: restarts, partitions, many clients (3A) ...
+  ... Passed --  27.3  5  7632 1216
+Test: unreliable net, restarts, partitions, many clients (3A) ...
+  ... Passed --  27.9  5  6383  884
+Test: unreliable net, restarts, partitions, random keys, many clients (3A) ...
+  ... Passed --  31.0  7 11583  933
+Test: InstallSnapshot RPC (3B) ...
+  ... Passed --   2.7  3   632   63
+Test: snapshot size is reasonable (3B) ...
+  ... Passed --   1.7  3  3033  800
+Test: ops complete fast enough (3B) ...
+  ... Passed --   2.2  3  3714    0
+Test: restarts, snapshots, one client (3B) ...
+  ... Passed --  18.8  5 25972 4442
+Test: restarts, snapshots, many clients (3B) ...
+  ... Passed --  19.2  5 21950 5483
+Test: unreliable net, snapshots, many clients (3B) ...
+  ... Passed --  15.9  5  7029 1156
+Test: unreliable net, restarts, snapshots, many clients (3B) ...
+  ... Passed --  19.8  5  7695 1153
+Test: unreliable net, restarts, partitions, snapshots, many clients (3B) ...
+  ... Passed --  27.0  5  7228  990
+Test: unreliable net, restarts, partitions, snapshots, random keys, many clients (3B) ...
+  ... Passed --  29.3  7 13225 1634
+PASS
+ok      6.824/kvraft    389.011s
+go test -race  548.64s user 19.31s system 145% cpu 6:29.43 total
+```
 ## Lab 3A
 不包含snapshot功能。
 ### 第一部分
@@ -244,3 +300,19 @@ Leader通过`InstallSnapshot`发送RPC调用给follower。follower判断是否�
 如果client都给每一个独立请求都赋一个递增的id，server就可以通过这个id来判断请求是不是过期的。server记录下每一个client的**已经commit**的最大请求id，以及这个id的应答，如果收到一个id小的请求，那这个请求肯定是由于网络延时导致重发的，可以忽略。如果又收到相同id为最大id的请求，那么重新发送应答。对于不同client的请求，他们之间的顺序是不会影响的。
 新的问题是，如果leader更换了，新的leader如何得知每个client的最大请求id以及相应的应答。有一种情况会导致错误：在旧的leader提交了请求，但是由于旧leader网络partion，应答失败了。然后切换到新的leader，这个leader在收到重复请求后，就会重新提交请求。
 可以通过将请求的id保存到raft中解决这个问题。当旧leader提交请求后，其他raft上的server也会从raft上获取到这个请求，然后应用到自己的状态机上。当新leader出现后，收到重复请求就能过分辨出来。此外，当server重启后，raft重新apply它的log，那么server又能重新获取到请求提交的信息，防止提交重复请求。
+## Lab 3B
+实现Snapshot
+1. 当raft的persist数据超过阈值后，状态机创建shot，发送给raft，raft trim日志，然后保存shot
+2. 当raft通过applyChan发送shot给状态机时，状态机读取shot。
+3. 重启server时，状态机要读取shot，恢复状态
+
+### 状态机创建Shot
+```go
+func (rf *Raft) Snapshot(index int, snapshot []byte)
+```
+这是raft的Snapshot函数签名；可以看出，snapshot是由状态机来创建的。
+状态机应该将过滤重复请求的信息和当前状态一起保存到snapshot中。
+创建和读取snapshot均通过persister来完成， 与raft的持久化一样。
+### 状态机读取Shot
+当leader认为某个follower太落后时，就会发送自己的shot给这个follower。其中包括自己状态机的状态和用于过滤重复请求的信息。
+当follower收到这个shot时， 就把它应用到自己的状态机。

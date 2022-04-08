@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"sync"
@@ -48,6 +49,7 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	persister     *raft.Persister
 	m             map[string]string
 	waitChan      map[string]chan Answer // key: uid + reqId +commandIndex
 	lastRequestId map[int64]int
@@ -114,6 +116,33 @@ func (kv *KVServer) deleteWaitChan(uid int64, reqId, index int) {
 	defer kv.mu.Unlock()
 	delete(kv.waitChan, key)
 }
+func (kv *KVServer) createSnapshot() []byte {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.lastRequestId)
+	e.Encode(kv.m)
+	data := w.Bytes()
+	return data
+}
+func (kv *KVServer) readSnapshot(data []byte) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var lastRequestId map[int64]int
+	var m map[string]string
+	if d.Decode(&lastRequestId) != nil ||
+		d.Decode(&m) != nil {
+		//   error...
+		DPrintf("\033[5;47;31mServer[%d] read ERROR!!!: data=%+v\033[0m", kv.me, data)
+	} else {
+		kv.m = m
+		kv.lastRequestId = lastRequestId
+		DPrintf("\033[5;47;30mServer[%d] read: %+v\033[0m", kv.me, data)
+	}
+}
 func (kv *KVServer) fetchApply() {
 	for !kv.killed() {
 		command := <-kv.applyCh
@@ -151,6 +180,20 @@ func (kv *KVServer) fetchApply() {
 				waitChan := kv.getWaitChan(op.UId, op.RequestId, index)
 				DPrintf("Server[%d] send answer to %+v", kv.me, op)
 				waitChan <- answer
+			}
+			// snapshot
+			// save kv.m and kv.lastRequestId
+			if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate {
+				kv.rf.Snapshot(index, kv.createSnapshot())
+			}
+		} else if command.SnapshotValid {
+			// snapshot
+			// call CondInstallSnapshot
+			si := command.SnapshotIndex
+			st := command.SnapshotTerm
+			snapshot := command.Snapshot
+			if kv.rf.CondInstallSnapshot(st, si, snapshot) {
+				kv.readSnapshot(snapshot)
 			}
 		}
 	}
@@ -204,11 +247,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
+	kv.persister = persister
 	// You may need initialization code here.
 	kv.m = make(map[string]string)
 	kv.lastRequestId = make(map[int64]int)
 	kv.waitChan = make(map[string]chan Answer)
+	kv.readSnapshot(kv.persister.ReadSnapshot())
 	go kv.fetchApply()
 	return kv
 }
