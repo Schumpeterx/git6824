@@ -316,3 +316,14 @@ func (rf *Raft) Snapshot(index int, snapshot []byte)
 ### 状态机读取Shot
 当leader认为某个follower太落后时，就会发送自己的shot给这个follower。其中包括自己状态机的状态和用于过滤重复请求的信息。
 当follower收到这个shot时， 就把它应用到自己的状态机。
+# Lab 4
+将key/value service进一步升级；某一个raft group只保存某一些key相关的键值对。此外，需要支持修改raft group支持的key，以及由此产生的数据迁移————将key/value从一个group迁移到另一个group。
+由一个Controller来管理Configure，也就是每个raft group的keys。
+## Lab 4A
+本节的点主要在于理解需求，以及实现负载均衡。
+实现一个Controller，包括Join、Leave、Move、Query语义。Join和Leave表示集群中加入和退出raft group，并且，在集群成员改变后，shard应该尽可能平均的分配在每一个集群成员上，也就是需要进行负载均衡。
+实际上Controller也是基于一组raft peers的Service，与Lab 3一样。 上述的四个操作即为对Controller Service的操作，类比Lab 3的Put、Append以及Get操作。Controller状态机的状态包括：
+1. 配置：configs  []Config // indexed by config num
+为了确保Controller状态机的一致性，Join、Leave、Move、Query都必须是确定性操作，也就是说，它们在一致的状态机上执行后，状态机仍然将保持一致。这里的难点在于，Map遍历顺序是不确定的，在迁移shard时如何保证确定性。
+1. Join：新建一个配置，加入N组新的group， 并且将其他group的shard均分到新group上。需要保证确定性。简单起见，每次从shards最多的group中选取一个shard(按shard大小顺序选取)到shards最少的group上
+2. Leave：将被删除的group对应的shards放到一个id最小的group上，然后再同Join一样进行平衡
