@@ -297,6 +297,7 @@ go test -race  548.64s user 19.31s system 145% cpu 6:29.43 total
 一个client一次只会发送一个请求，所以，在上一个请求没有成功返回之前，下一个请求不会发生。那么，对于重复的请求，有两种可能：
 1. 这个重复请求在这之前都没有成功返回过，有可能是因为返回时失败，也有可能请求没有被commit。这时，没有下一个请求发生
 2. 这个请求已经被成功返回过了，只不过由于网络问题，server又收到了这个请求。这时，下一个请求可能已经发生了
+
 如果client都给每一个独立请求都赋一个递增的id，server就可以通过这个id来判断请求是不是过期的。server记录下每一个client的**已经commit**的最大请求id，以及这个id的应答，如果收到一个id小的请求，那这个请求肯定是由于网络延时导致重发的，可以忽略。如果又收到相同id为最大id的请求，那么重新发送应答。对于不同client的请求，他们之间的顺序是不会影响的。
 新的问题是，如果leader更换了，新的leader如何得知每个client的最大请求id以及相应的应答。有一种情况会导致错误：在旧的leader提交了请求，但是由于旧leader网络partion，应答失败了。然后切换到新的leader，这个leader在收到重复请求后，就会重新提交请求。
 可以通过将请求的id保存到raft中解决这个问题。当旧leader提交请求后，其他raft上的server也会从raft上获取到这个请求，然后应用到自己的状态机上。当新leader出现后，收到重复请求就能过分辨出来。此外，当server重启后，raft重新apply它的log，那么server又能重新获取到请求提交的信息，防止提交重复请求。
@@ -324,7 +325,9 @@ func (rf *Raft) Snapshot(index int, snapshot []byte)
 实现一个Controller，包括Join、Leave、Move、Query语义。Join和Leave表示集群中加入和退出raft group，并且，在集群成员改变后，shard应该尽可能平均的分配在每一个集群成员上，也就是需要进行负载均衡。
 实际上Controller也是基于一组raft peers的Service，与Lab 3一样。 上述的四个操作即为对Controller Service的操作，类比Lab 3的Put、Append以及Get操作。Controller状态机的状态包括：
 1. 配置：configs  []Config // indexed by config num
+
 为了确保Controller状态机的一致性，Join、Leave、Move、Query都必须是确定性操作，也就是说，它们在一致的状态机上执行后，状态机仍然将保持一致。这里的难点在于，Map遍历顺序是不确定的，在迁移shard时如何保证确定性。
+
 1. Join：新建一个配置，加入N组新的group， 并且将其他group的shard均分到新group上。需要保证确定性。简单起见，每次从shards最多的group中选取一个shard(按shard大小顺序选取)到shards最少的group上
 2. Leave：将被删除的group对应的shards放到一个id最小的group上，然后再同Join一样进行平衡
 
