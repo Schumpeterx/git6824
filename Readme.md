@@ -327,3 +327,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte)
 为了确保Controller状态机的一致性，Join、Leave、Move、Query都必须是确定性操作，也就是说，它们在一致的状态机上执行后，状态机仍然将保持一致。这里的难点在于，Map遍历顺序是不确定的，在迁移shard时如何保证确定性。
 1. Join：新建一个配置，加入N组新的group， 并且将其他group的shard均分到新group上。需要保证确定性。简单起见，每次从shards最多的group中选取一个shard(按shard大小顺序选取)到shards最少的group上
 2. Leave：将被删除的group对应的shards放到一个id最小的group上，然后再同Join一样进行平衡
+
+## Lab 4B
+in progress...
